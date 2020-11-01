@@ -1,133 +1,288 @@
 package main
 
 import (
+	"bufio"
+	"flag"
 	"fmt"
 	"log"
 	"math/rand"
+	"os"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
-
-	"github.com/ozzono/normalize"
 
 	adb "github.com/ozzono/adbtools"
 )
 
 var (
-	device adb.Device
+	device      adb.Device
+	expressions map[string]string
+	login       loginData
+	globalLog   bool
+
+	omint = app{
+		pkg:      "br.com.omint.apps.minhaomint",
+		activity: "br.com.omint.apps.minhaomint.MainActivity",
+	}
+	coordExpression = "\\[\\d+,\\d+\\]\\[\\d+,\\d+\\]"
 )
 
 const (
-	omint         = "br.com.omint.apps.minhaomint"
-	omintActivity = "br.com.omint.apps.minhaomint.MainActivity"
+	defaultSleep = 100
 )
 
+type flow struct {
+	device   adb.Device
+	Invoices []Invoice
+	Login    loginData
+	close    func()
+}
+
+type app struct {
+	pkg      string
+	activity string
+}
+
+type loginData struct {
+	email string
+	pw    string
+}
+
+// Invoice has all the payment data
+type Invoice struct {
+	DueDate string
+	Value   string
+	BarCode string
+	Status  string
+}
+
+func init() {
+	flag.StringVar(&login.email, "email", "", "Sets the user login email")
+	flag.StringVar(&login.pw, "pw", "", "Sets the user login password")
+	flag.BoolVar(&globalLog, "log", true, "Sets the global log lvl")
+}
+
 func main() {
-	devices, err := adb.Devices()
-	if err != nil && !strings.Contains(err.Error(), "no devices found") {
+	flag.Parse()
+
+	expressions = allExpressions()
+	if err := checkLoginData(); err != nil {
+		log.Printf("checkLoginData err: %v", err)
+		return
+	}
+
+	flow, err := newFlow()
+	if err != nil {
 		log.Println(err)
 		return
 	}
-	if len(devices) == 0 {
-		log.Println("0 devices found")
-		err = adb.StartAnbox()
-		if err != nil {
-			log.Printf("StartAnbox err: %v", err)
-			return
-		}
-		sleep(20, "starting anbox")
-		devices, err = adb.Devices()
-		if err != nil {
-			log.Println(err)
-			return
-		}
-	}
-	device = devices[0]
-	device.CloseApp(omint)
-	device.StartApp(omint, omintActivity, "")
-	if !device.WaitApp(omint, 1000, 10) {
+	defer flow.close()
+
+	flow.device.WakeUp()
+	flow.device.Swipe([4]int{int(flow.device.Screen.Width / 2), flow.device.Screen.Height - 100, int(flow.device.Screen.Width / 2), 100})
+	_, err = flow.OmintInvoice()
+	if err != nil {
+		log.Println(err)
 		return
 	}
-	c := 0
-	for !hasInScreen("login") {
-		sleep(10, "waiting for login in xml screen")
-		c++
-		if c >= 10 {
-			return
-		}
-	}
-	fmt.Printf("%#v\n", applyRegexp("loginr.*?(\\[\\d+,\\d+\\]\\[\\d+,\\d+\\])", device.XMLScreen(false)))
+
 }
 
-func sleep(t int, note string) {
-	if len(note) > 0 {
-		log.Println("note:", note)
+func (flow *flow) OmintInvoice() (Invoice, error) {
+	deferMe, err := flow.device.ScreenTimeout("10m")
+	defer deferMe()
+	defer device.ScreenCap("omint.png")
+	if err != nil {
+		return Invoice{}, fmt.Errorf("ScreenTimeout err: %v", nil)
 	}
-	time.Sleep(time.Duration(int64(t*100)) * time.Second)
-}
+	flow.device.CloseApp(omint.pkg)
+	err = flow.device.StartApp(omint.pkg, omint.activity, "")
+	if err != nil {
+		return Invoice{}, err
+	}
 
-func hasInScreen(content ...string) bool {
-	for _, item := range content {
-		if strings.Contains(normalize.Norm(strings.ToLower(device.XMLScreen(true))), normalize.Norm(strings.ToLower(item))) {
-			return true
+	flow.sleep(50)
+
+	if !strings.Contains(flow.device.Foreground(), omint.pkg) {
+		xmlScreen, err := device.XMLScreen(true)
+		if err != nil {
+			return Invoice{}, err
+		}
+		if match("Allow.*to access this device", xmlScreen) {
+			coords, err := adb.XMLtoCoords(applyRegexp(expressions["deny-btn"], xmlScreen)[1])
+			if err != nil {
+				return Invoice{}, err
+			}
+			log.Println("Denying access to device's location")
+			flow.device.TapScreen(coords[0], coords[1], 10)
 		}
 	}
-	return false
+
+	if !flow.device.WaitApp(omint.pkg, 1000, 10) {
+		return Invoice{}, fmt.Errorf("%s app did not start", omint.pkg)
+	}
+
+	time.Sleep(time.Duration(20*flow.device.DefaultSleep) * time.Millisecond)
+
+	if device.HasInScreen(true, "Primeiro acesso", "login") {
+		if err := flow.loginFlow(); err != nil {
+			return Invoice{}, fmt.Errorf("loginFlow err: %v", err)
+		}
+	}
+
+	return Invoice{}, nil
+}
+
+func (flow *flow) loginFlow() error {
+	log.Println("Starting login flow")
+
+	xmlScreen, err := device.XMLScreen(true)
+	if err != nil {
+		return err
+	}
+	coords, err := adb.XMLtoCoords(applyRegexp(expressions["login-btn"], xmlScreen)[1])
+	if err != nil {
+		return err
+	}
+	flow.device.TapScreen(coords[0], coords[1], 10)
+
+	nodes := [][2]int{}
+	for _, item := range device.NodeList(true) {
+		if match(coordExpression, item) && strings.Contains(item, "NAF") {
+			coords, err := adb.XMLtoCoords(applyRegexp(fmt.Sprintf("(%s)", coordExpression), item)[1])
+			if err != nil {
+				return err
+			}
+			nodes = append(nodes, coords)
+		}
+	}
+
+	if len(nodes) != 2 {
+		return fmt.Errorf("failed to fetch login and pw nodes; nodes found: %v", nodes)
+	}
+
+	// email input
+	flow.device.TapScreen(nodes[0][0], nodes[0][1], 10)
+	flow.sleep(5)
+	flow.device.InputText(flow.Login.email, false)
+
+	// pw input
+	flow.device.TapScreen(nodes[1][0], nodes[1][1], 10)
+	flow.sleep(5)
+	flow.device.InputText(flow.Login.pw, false)
+
+	xmlScreen, err = flow.device.XMLScreen(true)
+	if err != nil {
+		return err
+	}
+	coords, err = adb.XMLtoCoords(applyRegexp(expressions["access-btn"], xmlScreen)[1])
+	// access button
+	flow.device.TapScreen(coords[0], coords[1], 10)
+
+	flow.sleep(50)
+
+	err = flow.device.WaitInScreen(5, "credencial", "contatos", "atendimento")
+	if err != nil {
+		return err
+	}
+
+	log.Println("Successfully logged in")
+	return nil
 }
 
 func applyRegexp(exp, text string) []string {
-	if device.Log {
-		log.Printf("Applying expression: %s", exp)
-	}
 	re := regexp.MustCompile(exp)
-	match := re.FindStringSubmatch(text)
-	if len(match) < 1 {
+	matches := re.FindStringSubmatch(text)
+	if len(matches) < 1 {
 		fmt.Printf("Unable to find match for exp %s\n", exp)
 		return []string{}
 	}
-	return match
+	return matches
 }
 
-func newRandNumber(i int) int {
+func newRandInt(i int) int {
 	return rand.New(rand.NewSource(time.Now().UnixNano())).Intn(i)
 }
 
-func xml2tap(xmlcoords string) (int, int) {
-	if device.Log {
-		log.Printf("Parsing coords: %s", xmlcoords)
+func allExpressions() map[string]string {
+	//default expression (\[\d+,\d+\]\[\d+,\d+\])
+	return map[string]string{
+		"login-btn":  "loginr.*?(\\[\\d+,\\d+\\]\\[\\d+,\\d+\\])",
+		"access-btn": "Acessar.*?(\\[\\d+,\\d+\\]\\[\\d+,\\d+\\])",
+		"deny-btn":   "DENY.*?(\\[\\d+,\\d+\\]\\[\\d+,\\d+\\])",
 	}
-	openbracket := "["
-	closebracket := "]"
-	joinedbracket := "]["
-	if string(xmlcoords[0]) == openbracket && string(xmlcoords[len(xmlcoords)-1]) == closebracket && strings.Contains(xmlcoords, joinedbracket) {
-		stringcoords := strings.Split(xmlcoords, "][")
-		leftcoords := strings.Split(string(stringcoords[0][1:]), ",")
-		rightcoords := strings.Split(string(stringcoords[1][:len(stringcoords[1])-1]), ",")
-		x1, err := strconv.Atoi(leftcoords[0])
-		if err != nil {
-			fmt.Printf("atoi err: %v", err)
-			return 0, 0
-		}
-		y1, err := strconv.Atoi(leftcoords[1])
-		if err != nil {
-			fmt.Printf("atoi err: %v", err)
-			return 0, 0
-		}
-		x2, err := strconv.Atoi(rightcoords[0])
-		if err != nil {
-			fmt.Printf("atoi err: %v", err)
-			return 0, 0
-		}
-		y2, err := strconv.Atoi(rightcoords[1])
-		if err != nil {
-			fmt.Printf("atoi err: %v", err)
-			return 0, 0
-		}
-		x := (x1 + x2) / 2
-		y := (y1 + y2) / 2
-		fmt.Printf("%s --- x: %d y: %d\n", xmlcoords, x, y)
-		return x, y
+}
+
+func checkLoginData() error {
+	log.Printf("Checking login data: %v", login)
+	if len(login.email) == 0 || !strings.Contains(login.email, "@") {
+		return fmt.Errorf("Invalid user email")
 	}
-	return 0, 0
+	if len(login.pw) == 0 {
+		return fmt.Errorf("Invalid user password")
+	}
+	return nil
+}
+
+func (flow *flow) defaultSleep(delay int) {
+	flow.device.DefaultSleep = delay
+}
+
+func match(exp, text string) bool {
+	return regexp.MustCompile(exp).MatchString(text)
+}
+
+func newFlow() (flow, error) {
+	device, has := hasEmulator()
+	if has {
+		return flow{
+			device: device,
+			close:  func() {},
+			Login:  login,
+		}, nil
+	}
+
+	close, err := adb.StartAVD(true, "lite")
+	if err != nil {
+		close()
+		return flow{}, err
+	}
+	time.Sleep(5 * time.Second)
+	devices, err := adb.Devices(globalLog)
+	if err != nil {
+		return flow{}, err
+	}
+	return flow{
+		device: devices[0],
+		close:  close,
+		Login:  login,
+	}, nil
+
+}
+
+func hasEmulator() (adb.Device, bool) {
+	devices, err := adb.Devices(true)
+	if err != nil {
+		return adb.Device{}, false
+	}
+	if len(devices) == 0 {
+		return adb.Device{}, false
+	}
+	for i := range devices {
+		if strings.HasSuffix(devices[i].ID, "emulator") {
+			return devices[i], true
+		}
+	}
+	return adb.Device{}, false
+}
+
+func waitEnter() {
+	log.Printf("Press <enter> to continue or <ctrl+c> to interrupt")
+	bufio.NewReader(os.Stdin).ReadBytes('\n')
+	log.Printf("Now, where was I?")
+	log.Printf("Oh yes...\n\n")
+}
+
+func (flow *flow) sleep(delay int) {
+	time.Sleep(time.Duration(delay*flow.device.DefaultSleep) * time.Millisecond)
 }
