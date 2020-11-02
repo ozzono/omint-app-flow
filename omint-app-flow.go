@@ -130,21 +130,82 @@ func (flow *flow) OmintInvoice() (Invoice, error) {
 		}
 	}
 
+	flow.sleep(20)
+
+	err = flow.invoicePDF()
+	if err != nil {
+		return Invoice{}, err
+	}
+
 	return Invoice{}, nil
+}
+
+func (flow *flow) invoicePDF() error {
+	log.Println("Starting invoice PDF flow")
+
+	err := flow.exp2tap(expressions["menu-btn"])
+	if err != nil {
+		return err
+	}
+
+	flow.sleep(10)
+
+	err = flow.exp2tap(expressions["invoice-btn"])
+	if err != nil {
+		return err
+	}
+
+	flow.sleep(10)
+
+	err = flow.exp2tap(expressions["invoice-pdf"])
+	if err != nil {
+		return err
+	}
+
+	err = device.WaitInScreen(10, "fatura", "pdf")
+	if err != nil {
+		return err
+	}
+
+	err = device.WaitInScreen(10, "download", "ok", "cancel")
+	if err != nil {
+		return err
+	}
+
+	err = flow.exp2tap(expressions["ok-btn"])
+	if err != nil {
+		return err
+	}
+
+	err = flow.exp2tap(expressions["more-options"])
+	if err != nil {
+		return err
+	}
+
+	err = flow.exp2tap(expressions["dl-button"])
+	if err != nil {
+		return err
+	}
+
+	if err := flow.device.WaitInScreen(2, "allow_button", "deny", "permission_message"); err != nil {
+		log.Printf("Permission already given; err: %v", nil)
+	} else {
+		err = flow.exp2tap(expressions["allow-button"])
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (flow *flow) loginFlow() error {
 	log.Println("Starting login flow")
 
-	xmlScreen, err := device.XMLScreen(true)
+	err := flow.exp2tap(expressions["login-btn"])
 	if err != nil {
 		return err
 	}
-	coords, err := adb.XMLtoCoords(applyRegexp(expressions["login-btn"], xmlScreen)[1])
-	if err != nil {
-		return err
-	}
-	flow.device.TapScreen(coords[0], coords[1], 10)
 
 	nodes := [][2]int{}
 	for _, item := range device.NodeList(true) {
@@ -171,13 +232,10 @@ func (flow *flow) loginFlow() error {
 	flow.sleep(5)
 	flow.device.InputText(flow.Login.pw, false)
 
-	xmlScreen, err = flow.device.XMLScreen(true)
+	err = flow.exp2tap(expressions["access-btn"])
 	if err != nil {
 		return err
 	}
-	coords, err = adb.XMLtoCoords(applyRegexp(expressions["access-btn"], xmlScreen)[1])
-	// access button
-	flow.device.TapScreen(coords[0], coords[1], 10)
 
 	flow.sleep(50)
 
@@ -207,9 +265,16 @@ func newRandInt(i int) int {
 func allExpressions() map[string]string {
 	//default expression (\[\d+,\d+\]\[\d+,\d+\])
 	return map[string]string{
-		"login-btn":  "loginr.*?(\\[\\d+,\\d+\\]\\[\\d+,\\d+\\])",
-		"access-btn": "Acessar.*?(\\[\\d+,\\d+\\]\\[\\d+,\\d+\\])",
-		"deny-btn":   "DENY.*?(\\[\\d+,\\d+\\]\\[\\d+,\\d+\\])",
+		"login-btn":    "loginr.*?(\\[\\d+,\\d+\\]\\[\\d+,\\d+\\])",
+		"access-btn":   "Acessar.*?(\\[\\d+,\\d+\\]\\[\\d+,\\d+\\])",
+		"deny-btn":     "DENY.*?(\\[\\d+,\\d+\\]\\[\\d+,\\d+\\])",
+		"menu-btn":     "logo-omint-letters.*?(\\[\\d+,\\d+\\]\\[\\d+,\\d+\\])",
+		"invoice-btn":  "Faturas.*?(\\[\\d+,\\d+\\]\\[\\d+,\\d+\\])",
+		"invoice-pdf":  "(\\[\\d+,\\d+\\]\\[\\d+,\\d+\\])\" /><node index=\".\" text=\"N°: \\d{7}\"",
+		"ok-btn":       "OK.*?(\\[\\d+,\\d+\\]\\[\\d+,\\d+\\])",
+		"more-options": "More options.*?(\\[\\d+,\\d+\\]\\[\\d+,\\d+\\])",
+		"allow-button": "allow_button.*?(\\[\\d+,\\d+\\]\\[\\d+,\\d+\\])",
+		"dl-button":    "Download.*?(\\[\\d+,\\d+\\]\\[\\d+,\\d+\\])",
 	}
 }
 
@@ -285,4 +350,17 @@ func waitEnter() {
 
 func (flow *flow) sleep(delay int) {
 	time.Sleep(time.Duration(delay*flow.device.DefaultSleep) * time.Millisecond)
+}
+
+func (flow *flow) exp2tap(exp string) error {
+	xmlScreen, err := device.XMLScreen(true)
+	if err != nil {
+		return err
+	}
+	coords, err := adb.XMLtoCoords(applyRegexp(exp, xmlScreen)[1])
+	if err != nil {
+		return err
+	}
+	flow.device.TapScreen(coords[0], coords[1], 10)
+	return nil
 }
