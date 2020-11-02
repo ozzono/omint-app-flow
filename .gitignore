@@ -1,4 +1,5 @@
 *.xml
 *.txt
 *.json
+*.pdf
 .vscode

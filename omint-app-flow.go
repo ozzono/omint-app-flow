@@ -19,6 +19,7 @@ var (
 	expressions map[string]string
 	login       loginData
 	globalLog   bool
+	pullFile    string
 
 	omint = app{
 		pkg:      "br.com.omint.apps.minhaomint",
@@ -122,9 +123,9 @@ func (flow *flow) OmintInvoice() (Invoice, error) {
 		return Invoice{}, fmt.Errorf("%s app did not start", omint.pkg)
 	}
 
-	time.Sleep(time.Duration(20*flow.device.DefaultSleep) * time.Millisecond)
+	flow.sleep(50)
 
-	if device.HasInScreen(true, "Primeiro acesso", "login") {
+	if flow.device.HasInScreen(true, "Primeiro acesso", "login") {
 		if err := flow.loginFlow(); err != nil {
 			return Invoice{}, fmt.Errorf("loginFlow err: %v", err)
 		}
@@ -182,6 +183,10 @@ func (flow *flow) invoicePDF() error {
 		return err
 	}
 
+	dump := strings.Replace(strings.TrimPrefix(flow.device.Shell("adb shell uiautomator dump"), "UI hierchary dumped to: "), "\n", "", -1)
+	download := fmt.Sprintf("/%s/Download", strings.Split(string(dump[1:]), "/")[0])
+	flow.device.Shell(fmt.Sprintf("adb shell rm %s/*", download))
+
 	err = flow.exp2tap(expressions["dl-button"])
 	if err != nil {
 		return err
@@ -195,6 +200,18 @@ func (flow *flow) invoicePDF() error {
 			return err
 		}
 	}
+
+	file := applyRegexp(
+		"(Fatura_\\d{7}.pdf)", //Fatura_0000000.pdf
+		flow.device.Shell("adb shell ls "+download))[1]
+	if len(file) == 0 {
+		return fmt.Errorf("failed to find invoice pdf file")
+	}
+	if !strings.Contains(flow.device.Shell(fmt.Sprintf("adb pull %s/%s invoice.pdf", download, file)), "1 file pulled") {
+		return fmt.Errorf("failed to pull %s/%s", download, file)
+	}
+
+	flow.device.Shell(fmt.Sprintf("adb shell rm %s/*", download))
 
 	return nil
 }
