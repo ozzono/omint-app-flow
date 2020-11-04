@@ -1,8 +1,7 @@
-package main
+package omint
 
 import (
 	"bufio"
-	"flag"
 	"fmt"
 	"log"
 	"math/rand"
@@ -16,10 +15,7 @@ import (
 )
 
 var (
-	device      adb.Device
 	expressions map[string]string
-	login       loginData
-	globalLog   bool
 	pullFile    string
 
 	omint = app{
@@ -33,11 +29,12 @@ const (
 	defaultSleep = 100
 )
 
-type flow struct {
+// Flow contains all the data to fetch the invoice data
+type Flow struct {
 	device   adb.Device
 	Invoices []Invoice
-	Login    loginData
-	close    func()
+	Login    LoginData
+	Close    func()
 }
 
 type app struct {
@@ -45,9 +42,10 @@ type app struct {
 	activity string
 }
 
-type loginData struct {
-	email string
-	pw    string
+// LoginData contains the needed data to successfully log in the app
+type LoginData struct {
+	Email string
+	Pw    string
 }
 
 // Invoice has all the payment data
@@ -58,48 +56,42 @@ type Invoice struct {
 	Status  string
 }
 
-func init() {
-	flag.StringVar(&login.email, "email", "", "Sets the user login email")
-	flag.StringVar(&login.pw, "pw", "", "Sets the user login password")
-	flag.BoolVar(&globalLog, "log", true, "Sets the global log lvl")
-}
+// func main() {
 
-func main() {
-	flag.Parse()
+// 	flow, err := NewFlow()
+// 	if err != nil {
+// 		log.Println(err)
+// 		return
+// 	}
+// 	defer flow.close()
 
+// 	if !strings.Contains(flow.device.ID, "emulator") {
+// 		flow.device.WakeUp()
+// 		flow.device.Swipe([4]int{int(flow.device.Screen.Width / 2), flow.device.Screen.Height - 100, int(flow.device.Screen.Width / 2), 100})
+// 	}
+
+// 	invoice, err := flow.OmintInvoice()
+// 	if err != nil {
+// 		log.Println(err)
+// 		return
+// 	}
+// 	fmt.Printf("invoice %#v\n", invoice)
+// }
+
+func (flow *Flow) OmintInvoice() (Invoice, error) {
 	expressions = allExpressions()
-	if err := checkLoginData(); err != nil {
-		log.Printf("checkLoginData err: %v", err)
-		return
+
+	if err := flow.checkLoginData(); err != nil {
+		return Invoice{}, fmt.Errorf("checkLoginData err: %v", err)
 	}
 
-	flow, err := newFlow()
+	close, err := flow.device.ScreenTimeout("10m")
 	if err != nil {
-		log.Println(err)
-		return
-	}
-	defer flow.close()
-
-	if !strings.Contains(flow.device.ID, "emulator") {
-		flow.device.WakeUp()
-		flow.device.Swipe([4]int{int(flow.device.Screen.Width / 2), flow.device.Screen.Height - 100, int(flow.device.Screen.Width / 2), 100})
-	}
-
-	invoice, err := flow.OmintInvoice()
-	if err != nil {
-		log.Println(err)
-		return
-	}
-	fmt.Printf("invoice %#v\n", invoice)
-}
-
-func (flow *flow) OmintInvoice() (Invoice, error) {
-	deferMe, err := flow.device.ScreenTimeout("10m")
-	defer deferMe()
-	defer device.ScreenCap("omint.png")
-	if err != nil {
+		close()
 		return Invoice{}, fmt.Errorf("screenTimeout err: %v", nil)
 	}
+	defer close()
+
 	flow.device.CloseApp(omint.pkg)
 	err = flow.device.StartApp(omint.pkg, omint.activity, "")
 	if err != nil {
@@ -109,7 +101,7 @@ func (flow *flow) OmintInvoice() (Invoice, error) {
 	flow.sleep(50)
 
 	if !strings.Contains(flow.device.Foreground(), omint.pkg) {
-		xmlScreen, err := device.XMLScreen(true)
+		xmlScreen, err := flow.device.XMLScreen(true)
 		if err != nil {
 			return Invoice{}, err
 		}
@@ -185,7 +177,7 @@ func barCode(input string) string {
 	return input
 }
 
-func (flow *flow) invoicePDF() (bool, error) {
+func (flow *Flow) invoicePDF() (bool, error) {
 	log.Println("starting invoice PDF flow")
 
 	err := flow.exp2tap(expressions["menu-btn"])
@@ -213,11 +205,11 @@ func (flow *flow) invoicePDF() (bool, error) {
 		return false, err
 	}
 
-	err = device.WaitInScreen(10, "fatura", "pdf")
+	err = flow.device.WaitInScreen(10, "fatura", "pdf")
 	if err != nil {
 		return false, err
 	}
-	err = device.WaitInScreen(10, "download", "ok", "cancel")
+	err = flow.device.WaitInScreen(10, "download", "ok", "cancel")
 	if err != nil {
 		return false, err
 	}
@@ -268,7 +260,7 @@ func (flow *flow) invoicePDF() (bool, error) {
 	return true, nil
 }
 
-func (flow *flow) loginFlow() error {
+func (flow *Flow) loginFlow() error {
 	log.Println("starting login flow")
 
 	err := flow.exp2tap(expressions["login-btn"])
@@ -277,7 +269,7 @@ func (flow *flow) loginFlow() error {
 	}
 
 	nodes := [][2]int{}
-	for _, item := range device.NodeList(true) {
+	for _, item := range flow.device.NodeList(true) {
 		if match(coordExpression, item) && strings.Contains(item, "NAF") {
 			coords, err := adb.XMLtoCoords(applyRegexp(fmt.Sprintf("(%s)", coordExpression), item)[1])
 			if err != nil {
@@ -294,12 +286,12 @@ func (flow *flow) loginFlow() error {
 	// email input
 	flow.device.TapScreen(nodes[0][0], nodes[0][1], 10)
 	flow.sleep(5)
-	flow.device.InputText(flow.Login.email, false)
+	flow.device.InputText(flow.Login.Email, false)
 
 	// pw input
 	flow.device.TapScreen(nodes[1][0], nodes[1][1], 10)
 	flow.sleep(5)
-	flow.device.InputText(flow.Login.pw, false)
+	flow.device.InputText(flow.Login.Pw, false)
 
 	err = flow.exp2tap(expressions["access-btn"])
 	if err != nil {
@@ -350,18 +342,18 @@ func allExpressions() map[string]string {
 	}
 }
 
-func checkLoginData() error {
-	log.Printf("checking login data: %v", login)
-	if len(login.email) == 0 || !strings.Contains(login.email, "@") {
+func (flow *Flow) checkLoginData() error {
+	log.Printf("checking login data: %v", flow.Login)
+	if len(flow.Login.Email) == 0 || !strings.Contains(flow.Login.Email, "@") {
 		return fmt.Errorf("invalid user email")
 	}
-	if len(login.pw) == 0 {
+	if len(flow.Login.Pw) == 0 {
 		return fmt.Errorf("invalid user password")
 	}
 	return nil
 }
 
-func (flow *flow) defaultSleep(delay int) {
+func (flow *Flow) defaultSleep(delay int) {
 	flow.device.DefaultSleep = delay
 }
 
@@ -369,34 +361,44 @@ func match(exp, text string) bool {
 	return regexp.MustCompile(exp).MatchString(text)
 }
 
-func newFlow() (flow, error) {
+// NewFlow creates a flow with all the needed data to get the invoice data
+func NewFlow(loginData LoginData, logLvl, emulated bool) (Flow, error) {
+	if emulated {
+		devices, err := adb.Devices(logLvl)
+		if err != nil {
+			return Flow{}, err
+		}
+		return Flow{
+			device: devices[0],
+			Login:  loginData,
+			Close:  func() {},
+		}, nil
+	}
 	device, has := hasEmulator()
 	if has {
-		return flow{
+		return Flow{
 			device: device,
-			close:  func() {},
-			Login:  login,
+			Close:  func() {},
+			Login:  loginData,
 		}, nil
 	}
 
-	beforeCall, _ := adb.Devices(globalLog)
+	beforeCall, _ := adb.Devices(logLvl)
 	log.Printf("already available devices: %d", len(beforeCall))
 
 	close, err := adb.StartAVD(true, "lite")
 	if err != nil {
 		close()
-		return flow{}, err
+		return Flow{}, err
 	}
-
-	devices, _ := adb.Devices(globalLog)
-	// time.Sleep(3 * time.Second)
+	devices, _ := adb.Devices(logLvl)
 	if len(devices) == len(beforeCall) {
 		max := 5
-		for devices, err = adb.Devices(globalLog); len(devices) == len(beforeCall); devices, err = adb.Devices(globalLog) {
+		for devices, err = adb.Devices(logLvl); len(devices) == len(beforeCall); devices, err = adb.Devices(logLvl) {
 			max--
 			if max == 0 {
 				close()
-				return flow{}, fmt.Errorf("failed to start emulator")
+				return Flow{}, fmt.Errorf("failed to start emulator")
 			}
 
 			time.Sleep(1 * time.Second)
@@ -404,21 +406,21 @@ func newFlow() (flow, error) {
 	}
 	if err != nil {
 		close()
-		return flow{}, err
+		return Flow{}, err
 	}
 
 	err = devices[0].WaitDeviceReady(10)
 	if err != nil {
 		close()
-		return flow{}, err
+		return Flow{}, err
 	}
 
 	time.Sleep(5 * time.Second)
 
-	return flow{
+	return Flow{
 		device: devices[0],
-		close:  close,
-		Login:  login,
+		Close:  close,
+		Login:  loginData,
 	}, nil
 
 }
@@ -446,12 +448,12 @@ func waitEnter() {
 	log.Printf("oh yes...\n\n")
 }
 
-func (flow *flow) sleep(delay int) {
+func (flow *Flow) sleep(delay int) {
 	time.Sleep(time.Duration(delay*flow.device.DefaultSleep) * time.Millisecond)
 }
 
-func (flow *flow) exp2tap(exp string) error {
-	xmlScreen, err := device.XMLScreen(true)
+func (flow *Flow) exp2tap(exp string) error {
+	xmlScreen, err := flow.device.XMLScreen(true)
 	if err != nil {
 		return err
 	}
@@ -463,7 +465,7 @@ func (flow *flow) exp2tap(exp string) error {
 	return nil
 }
 
-func (flow *flow) storagePath() (string, error) {
+func (flow *Flow) storagePath() (string, error) {
 	dumpOutput := flow.device.Shell("adb shell uiautomator dump")
 	if !strings.Contains(dumpOutput, "dump.xml") {
 		return "", fmt.Errorf("failed to dump screen xml: %s", dumpOutput)
