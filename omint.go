@@ -78,6 +78,7 @@ type Invoice struct {
 // 	fmt.Printf("invoice %#v\n", invoice)
 // }
 
+// OmintInvoice executes all steps to fetch the Invoice data
 func (flow *Flow) OmintInvoice() (Invoice, error) {
 	expressions = allExpressions()
 
@@ -362,35 +363,43 @@ func match(exp, text string) bool {
 }
 
 // NewFlow creates a flow with all the needed data to get the invoice data
-func NewFlow(loginData LoginData, logLvl, emulated bool) (Flow, error) {
-	if emulated {
+func NewFlow(logLvl, emulated bool, deviceID string) (Flow, error) {
+	if !emulated {
 		devices, err := adb.Devices(logLvl)
 		if err != nil {
 			return Flow{}, err
 		}
 		return Flow{
 			device: devices[0],
-			Login:  loginData,
-			Close:  func() {},
+			Close: func() {
+				log.Printf("the %s device was already active so it wont be stopped", devices[0].ID)
+			},
 		}, nil
 	}
+	if len(deviceID) == 0 {
+		return Flow{}, fmt.Errorf("invalid device id; cannot be empty")
+	}
 	device, has := hasEmulator()
-	if has {
+	if has && device.ID == deviceID {
 		return Flow{
 			device: device,
-			Close:  func() {},
-			Login:  loginData,
+			Close: func() {
+				log.Printf("the %s device was already active so it wont be stopped", deviceID)
+			},
 		}, nil
 	}
 
 	beforeCall, _ := adb.Devices(logLvl)
-	log.Printf("already available devices: %d", len(beforeCall))
+	if len(beforeCall) > 0 {
+		log.Printf("%d devices already available", len(beforeCall))
+	}
 
 	close, err := adb.StartAVD(true, "lite")
 	if err != nil {
 		close()
 		return Flow{}, err
 	}
+	time.Sleep(5 * time.Second)
 	devices, _ := adb.Devices(logLvl)
 	if len(devices) == len(beforeCall) {
 		max := 5
@@ -420,7 +429,6 @@ func NewFlow(loginData LoginData, logLvl, emulated bool) (Flow, error) {
 	return Flow{
 		device: devices[0],
 		Close:  close,
-		Login:  loginData,
 	}, nil
 
 }
