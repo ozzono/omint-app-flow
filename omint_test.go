@@ -7,36 +7,6 @@ import (
 	"testing"
 )
 
-func TestFlow(t *testing.T) {
-	t.Log("starting flow test")
-	config, err := configData("config_test.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	flow, err := NewFlow(true, true, config["deviceID"])
-	if err != nil {
-		t.Fatal(err)
-	}
-	flow.Login = LoginData{
-		Email: config["email"],
-		Pw:    config["pw"],
-	}
-	invoice, err := flow.OmintInvoice()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(invoice.BarCode) == 0 {
-		t.Fatalf("failed to fetch invoice bar code")
-	}
-	if len(invoice.DueDate) == 0 {
-		t.Fatalf("failed to fetch invoice due date")
-	}
-	if len(invoice.Value) == 0 {
-		t.Fatalf("failed to fetch invoice value")
-	}
-	t.Log("successfully teste flow")
-}
-
 func TestExpressions(t *testing.T) {
 	t.Log("testing expressions")
 	expressions := allExpressions()
@@ -64,6 +34,37 @@ func TestExpressions(t *testing.T) {
 		}
 	}
 	t.Log("successfully teste expressions")
+}
+
+func TestFlow(t *testing.T) {
+	t.Log("starting flow test")
+	config, err := configData("config_test.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	flow, err := NewFlow(true, true, false, config["deviceID"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	flow.Login = LoginData{
+		Email: config["email"],
+		Pw:    config["pw"],
+	}
+	invoice, err := flow.OmintInvoice()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(invoice.BarCode) == 0 {
+		t.Fatalf("failed to fetch invoice bar code")
+	}
+	if len(invoice.DueDate) == 0 {
+		t.Fatalf("failed to fetch invoice due date")
+	}
+	if len(invoice.Value) == 0 {
+		t.Fatalf("failed to fetch invoice value")
+	}
+	t.Logf("invoice: %#v", invoice)
+	t.Log("successfully teste flow")
 }
 
 func configData(path string) (map[string]string, error) {

@@ -363,7 +363,7 @@ func match(exp, text string) bool {
 }
 
 // NewFlow creates a flow with all the needed data to get the invoice data
-func NewFlow(logLvl, emulated bool, deviceID string) (Flow, error) {
+func NewFlow(logLvl, emulated, makeNew bool, deviceID string) (Flow, error) {
 	if !emulated {
 		devices, err := adb.Devices(logLvl)
 		if err != nil {
@@ -401,9 +401,9 @@ func NewFlow(logLvl, emulated bool, deviceID string) (Flow, error) {
 	}
 	time.Sleep(5 * time.Second)
 	devices, _ := adb.Devices(logLvl)
-	if len(devices) == len(beforeCall) {
+	if len(devices) == len(beforeCall) || len(devices) == 0 {
 		max := 5
-		for devices, err = adb.Devices(logLvl); len(devices) == len(beforeCall); devices, err = adb.Devices(logLvl) {
+		for devices, err = adb.Devices(logLvl); len(devices) == len(beforeCall) && makeNew; devices, err = adb.Devices(logLvl) {
 			max--
 			if max == 0 {
 				close()
