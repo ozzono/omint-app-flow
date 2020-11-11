@@ -50,7 +50,7 @@ func TestFlow(t *testing.T) {
 		Email: config["email"],
 		Pw:    config["pw"],
 	}
-	invoice, err := flow.OmintInvoice()
+	invoice, err := flow.InvoiceFlow()
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -56,30 +56,8 @@ type Invoice struct {
 	Status  string
 }
 
-// func main() {
-
-// 	flow, err := NewFlow()
-// 	if err != nil {
-// 		log.Println(err)
-// 		return
-// 	}
-// 	defer flow.close()
-
-// 	if !strings.Contains(flow.device.ID, "emulator") {
-// 		flow.device.WakeUp()
-// 		flow.device.Swipe([4]int{int(flow.device.Screen.Width / 2), flow.device.Screen.Height - 100, int(flow.device.Screen.Width / 2), 100})
-// 	}
-
-// 	invoice, err := flow.OmintInvoice()
-// 	if err != nil {
-// 		log.Println(err)
-// 		return
-// 	}
-// 	fmt.Printf("invoice %#v\n", invoice)
-// }
-
-// OmintInvoice executes all steps to fetch the Invoice data
-func (flow *Flow) OmintInvoice() (Invoice, error) {
+// InvoiceFlow executes all steps to fetch the Invoice data
+func (flow *Flow) InvoiceFlow() (Invoice, error) {
 	expressions = allExpressions()
 
 	if err := flow.checkLoginData(); err != nil {
@@ -167,7 +145,7 @@ func pdfFlow() (Invoice, error) {
 	return Invoice{
 		Value:   applyRegexp(expressions["pdf-value"], pdfText)[1],
 		DueDate: applyRegexp(expressions["pdf-duedate"], pdfText)[1],
-		BarCode: barCode(applyRegexp(expressions["pdf-barcode"], pdfText)[1]),
+		BarCode: applyRegexp(expressions["pdf-barcode"], pdfText)[1],
 		Status:  "pending",
 	}, nil
 }
